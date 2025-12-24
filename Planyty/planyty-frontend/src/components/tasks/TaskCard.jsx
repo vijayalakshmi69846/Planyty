@@ -1,0 +1,130 @@
+import React from 'react';
+import { Tag, Clock, User, CheckCircle, Flag } from 'lucide-react';
+
+const getPriorityStyles = (priority) => {
+  switch (priority) {
+    case 'High':
+      return {
+        icon: <Flag className="w-3 h-3 text-red-500" />,
+        bg: 'bg-red-100',
+      };
+    case 'Medium':
+      return {
+        icon: <Flag className="w-3 h-3 text-yellow-500" />,
+        bg: 'bg-yellow-100',
+      };
+    case 'Low':
+      return {
+        icon: <Flag className="w-3 h-3 text-green-500" />,
+        bg: 'bg-green-100',
+      };
+    default:
+      return {
+        icon: <Flag className="w-3 h-3 text-gray-500" />,
+        bg: 'bg-gray-100',
+      };
+  }
+};
+
+const TaskCard = ({ task, isCompleted = false }) => {
+  const subtasks = task.subtasks || [];
+  const completedSubtasks = subtasks.filter(subtask => subtask.status === 'completed').length;
+  const progress = subtasks.length > 0 ? (completedSubtasks / subtasks.length) * 100 : 0;
+  const priorityStyles = getPriorityStyles(task.priority);
+
+  return (
+    <div
+      className={`p-3 rounded-lg border-2 transition-all duration-300 flex flex-col gap-2 cursor-pointer ${
+        isCompleted 
+          ? 'bg-green-50 border-green-200 opacity-80' 
+          : 'bg-white border-purple-200 hover:shadow-md'
+      }`}
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <h3 className={`font-semibold text-sm flex-1 ${
+          isCompleted ? 'text-green-700 line-through' : 'text-purple-800'
+        }`}>
+          {task.title}
+        </h3>
+      </div>
+
+      {/* Tags */}
+      {task.tags && task.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {task.tags.map((tag, index) => (
+            <span
+              key={index}
+              className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                isCompleted 
+                  ? 'bg-green-100 text-green-700' 
+                  : 'bg-purple-100 text-purple-700'
+              }`}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Progress Bar */}
+      {subtasks.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className={`text-xs font-medium ${
+              isCompleted ? 'text-green-600' : 'text-purple-600'
+            }`}>
+              Progress
+            </span>
+            <span className={`text-xs font-bold ${
+              isCompleted ? 'text-green-700' : 'text-purple-700'
+            }`}>
+              {completedSubtasks}/{subtasks.length}
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-1.5">
+            <div
+              className={`h-1.5 rounded-full ${
+                isCompleted ? 'bg-green-500' : 'bg-purple-500'
+              }`}
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+        <div className="flex items-center gap-2">
+          <div className={`p-1 rounded-full ${priorityStyles.bg}`}>
+            {priorityStyles.icon}
+          </div>
+          <div className={`flex items-center gap-1 text-xs ${
+            isCompleted ? 'text-green-600' : 'text-purple-600'
+          }`}>
+            <Clock size={12} />
+            <span>{task.dueDate || 'No date'}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <User size={14} className={isCompleted ? 'text-green-500' : 'text-purple-500'} />
+          <span className={`text-sm font-medium ${
+            isCompleted ? 'text-green-700' : 'text-purple-800'
+          }`}>
+            {task.assignee || 'Unassigned'}
+          </span>
+        </div>
+      </div>
+
+      {/* Completion Date */}
+      {isCompleted && task.completedAt && (
+        <div className="flex items-center gap-1 text-xs text-green-600">
+          <CheckCircle className="w-3 h-3" />
+          <span>Completed on {task.completedAt}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TaskCard;
