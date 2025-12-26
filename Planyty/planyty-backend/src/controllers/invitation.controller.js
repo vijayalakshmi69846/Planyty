@@ -37,10 +37,8 @@ exports.sendInvitation = async (req, res) => {
         const isMember = await TeamMember.findOne({ where: { team_id: team?.id, user_id: existingUser.id } });
         if (isMember) return res.status(400).json({ error: "This user is already a member of this workspace." });
     }
-
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
-
     const newInvitation = await Invitation.create({
       email: targetEmail,
       token,
