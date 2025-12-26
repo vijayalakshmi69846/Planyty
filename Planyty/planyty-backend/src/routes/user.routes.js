@@ -1,13 +1,17 @@
 const express = require('express');
 const router = express.Router();
+const userController = require('../controllers/user.controller');
 
-// Temporary routes - will add controllers later
-router.get('/', (req, res) => {
-  res.json({ message: 'Users endpoint' });
-});
+// CHANGE THIS LINE: Use { protect } instead of { auth }
+const { protect } = require('../middleware/auth.middleware');
 
-router.get('/:id', (req, res) => {
-  res.json({ message: `Get user ${req.params.id}` });
-});
+// Search must come BEFORE /:id so it doesn't get treated as an ID
+// UPDATE 'auth' to 'protect' in all routes below
+router.get('/search', protect, userController.searchUsers);
+router.get('/', protect, userController.getAllUsers);
+router.get('/:id', protect, userController.getUserById);
+router.put('/profile', protect, userController.updateProfile);
+router.put('/change-password', protect, userController.changePassword);
+router.put('/:id/role', protect, userController.updateUserRole);
 
 module.exports = router;

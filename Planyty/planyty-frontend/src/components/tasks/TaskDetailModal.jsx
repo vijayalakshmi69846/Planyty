@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { X, Edit, Plus, ChevronDown, ChevronRight, Calendar, User, Flag, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { X, Edit, Trash2, Plus, ChevronDown, ChevronRight, Calendar, User, Flag, Loader2 } from 'lucide-react';
 import TaskForm from './TaskForm';
 import Button from '../ui/Button';
 import SubtaskItem from './SubtaskItem';
+import api from '../../services/api';
+import toast from 'react-hot-toast';
 
-const TaskDetailModal = ({ task, onClose, onUpdateTask }) => {
+const TaskDetailModal = ({ task, onClose, onUpdateTask, onDelete }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showSubtaskForm, setShowSubtaskForm] = useState(false);
   const [subtasksExpanded, setSubtasksExpanded] = useState(true);
@@ -14,26 +16,18 @@ const TaskDetailModal = ({ task, onClose, onUpdateTask }) => {
     setCurrentTask(task);
   }, [task]);
 
-  useEffect(() => {
-    const subtasks = currentTask.subtasks || [];
-    if (subtasks.length > 0) {
-      const allCompleted = subtasks.every(s => s.status === 'completed');
-      const anyInProgress = subtasks.some(s => s.status === 'in progress' || s.status === 'completed');
-
-      let newStatus = currentTask.status;
-      if (allCompleted) {
-        newStatus = 'completed';
-      } else if (anyInProgress) {
-        newStatus = 'in progress';
-      } else {
-        newStatus = 'not yet begun';
-      }
-
-      if (newStatus !== currentTask.status) {
-        handleStatusChange(newStatus);
-      }
-    }
-  }, [currentTask.subtasks, currentTask.status]);
+  // Check role for Privacy
+  const { isMember, canManage } = useMemo(() => {
+    const userStr = localStorage.getItem('planyty_user');
+    try {
+      const user = userStr ? JSON.parse(userStr) : null;
+      const role = (user?.role || '').toLowerCase();
+      return {
+        isMember: role === 'member',
+        canManage: role === 'admin' || role === 'team_lead'
+      };
+    } catch (e) { return { isMember: true, canManage: false }; }
+  }, []);
 
   const handleUpdate = (updatedTask) => {
     setCurrentTask(updatedTask);
@@ -41,223 +35,161 @@ const TaskDetailModal = ({ task, onClose, onUpdateTask }) => {
     setIsEditing(false);
   };
 
-  const handleAddSubtask = (subtaskData) => {
-    const newSubtask = {
-      id: Date.now().toString(),
-      ...subtaskData,
-      status: 'not yet begun',
-      subtasks: []
-    };
-    
-    const updatedTask = {
-      ...currentTask,
-      subtasks: [...(currentTask.subtasks || []), newSubtask],
-    };
-    
-    setCurrentTask(updatedTask);
-    onUpdateTask(updatedTask);
-    setShowSubtaskForm(false);
-  };
+  const handleAddSubtask = async (subtaskData) => {
+    try {
+      // FIX 400 ERROR: Clean the payload to ensure IDs are numbers, not objects
+      const payload = {
+        title: subtaskData.title,
+        description: subtaskData.description,
+        assigned_to: typeof subtaskData.assigned_to === 'object' ? subtaskData.assigned_to.id : subtaskData.assigned_to,
+        status: 'not yet begun',
+        due_date: subtaskData.due_date,
+        priority: subtaskData.priority || 'medium'
+      };
 
-  const handleUpdateSubtask = (updatedSubtask) => {
-    const updatedSubtasks = (currentTask.subtasks || []).map(sub =>
-      sub.id === updatedSubtask.id ? updatedSubtask : sub
-    );
-    const updatedTask = { ...currentTask, subtasks: updatedSubtasks };
-    setCurrentTask(updatedTask);
-    onUpdateTask(updatedTask);
-  };
-
-  const handleDeleteSubtask = (subtaskId) => {
-    const updatedSubtasks = (currentTask.subtasks || []).filter(sub => sub.id !== subtaskId);
-    const updatedTask = { ...currentTask, subtasks: updatedSubtasks };
-    setCurrentTask(updatedTask);
-    onUpdateTask(updatedTask);
-  };
-
-  const handleStatusChange = (newStatus) => {
-    const updatedTask = { ...currentTask, status: newStatus };
-    setCurrentTask(updatedTask);
-    onUpdateTask(updatedTask);
-  };
-
-  const handleModalClick = (e) => {
-    e.stopPropagation();
-  };
-
-  const subtasks = currentTask.subtasks || [];
-  const completedSubtasks = subtasks.filter(subtask => subtask.status === 'completed').length;
-  const totalSubtasks = subtasks.length;
-  const subtaskProgress = totalSubtasks > 0 ? (completedSubtasks / totalSubtasks) * 100 : 0;
-
-  const getStatusPill = (status) => {
-    switch (status) {
-      case 'not yet begun':
-        return <span className="bg-red-100 text-red-800 px-3 py-1 rounded-full text-xs font-medium">Not Yet Begun</span>;
-      case 'in progress':
-        return <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs font-medium">In Progress</span>;
-      case 'completed':
-        return <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">Completed</span>;
-      default:
-        return <span className="bg-gray-100 text-gray-800 px-3 py-1 rounded-full text-xs font-medium">Unknown</span>;
+      const response = await api.post(`/tasks/${currentTask.id}/subtasks`, payload);
+      const updatedTask = {
+        ...currentTask,
+        subtasks: [...(currentTask.subtasks || []), response.data]
+      };
+      handleUpdate(updatedTask);
+      setShowSubtaskForm(false);
+      toast.success("Subtask added!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add subtask. Check console for 400 errors.");
     }
   };
 
+  const handleUpdateSubtask = async (updatedSubtask) => {
+    try {
+      // Ensure we hit the correct PUT endpoint
+      const response = await api.put(`/tasks/subtasks/${updatedSubtask.id}`, updatedSubtask);
+      const updatedSubtasks = currentTask.subtasks.map(s => 
+        s.id === updatedSubtask.id ? response.data : s
+      );
+      handleUpdate({ ...currentTask, subtasks: updatedSubtasks });
+    } catch (err) {
+      toast.error("Update failed");
+    }
+  };
+
+  // Inside TaskDetailModal.jsx
+
+const handleDeleteSubtask = async (subtaskId) => {
+  try {
+    // TRY THIS: Remove the /tasks/ prefix if your route is /api/subtasks/:id
+    await api.delete(`/subtasks/${subtaskId}`); 
+    
+    // If that still fails, check if your backend needs:
+    // await api.delete(`/tasks/${currentTask.id}/subtasks/${subtaskId}`);
+
+    const updatedSubtasks = (currentTask.subtasks || []).filter(s => s.id !== subtaskId);
+    handleUpdate({ ...currentTask, subtasks: updatedSubtasks });
+    toast.success("Subtask removed");
+  } catch (err) {
+    console.error("Delete Error:", err.response);
+    toast.error(`Delete failed: ${err.response?.status === 404 ? 'Route not found' : 'Server error'}`);
+  }
+};
+
+  const subtasks = currentTask.subtasks || [];
+  const completedSubtasks = subtasks.filter(sub => sub.status === 'completed').length;
+  const totalSubtasks = subtasks.length;
+  const subtaskProgress = totalSubtasks > 0 ? (completedSubtasks / totalSubtasks) * 100 : 0;
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col border-2 border-purple-200" onClick={handleModalClick}>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col border-2 border-purple-200" onClick={e => e.stopPropagation()}>
+        
+        {/* HEADER */}
         <div className="flex justify-between items-center p-6 border-b border-purple-200 bg-gradient-to-r from-purple-50 to-pink-50 rounded-t-xl">
           <h2 className="text-xl font-semibold text-purple-800">{currentTask.title}</h2>
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setIsEditing(true)}
-              className="p-2 hover:bg-yellow-100 rounded-full transition-all duration-300"
-            >
-              <Edit className="w-5 h-5 text-yellow-500" />
-            </button>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-red-100 rounded-full transition-all duration-300"
-            >
-              <X className="w-5 h-5 text-red-500" />
-            </button>
+          <div className="flex items-center gap-3">
+            {canManage && (
+              <>
+                <button onClick={() => setIsEditing(true)} className="p-2 hover:bg-yellow-100 rounded-full transition-colors"><Edit className="w-5 h-5 text-yellow-500" /></button>
+                <button onClick={onDelete} className="p-2 hover:bg-red-100 rounded-full transition-colors"><Trash2 className="w-5 h-5 text-red-500" /></button>
+              </>
+            )}
+            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X className="w-5 h-5 text-gray-500" /></button>
           </div>
         </div>
 
         {isEditing ? (
           <div className="p-6 overflow-y-auto">
-            <TaskForm 
-              task={currentTask} 
-              onSubmit={handleUpdate} 
-              onClose={() => setIsEditing(false)}
-            />
+            <TaskForm task={currentTask} onSubmit={handleUpdate} onClose={() => setIsEditing(false)} />
           </div>
         ) : (
           <div className="p-6 grid grid-cols-3 gap-8 overflow-y-auto">
             <div className="col-span-2">
-              <div className="mb-6">
-                <h3 className="font-semibold text-purple-700 mb-2">Description</h3>
-                <p className="text-gray-600 leading-relaxed">{currentTask.description || 'No description provided.'}</p>
-              </div>
+              <section className="mb-6">
+                <h3 className="text-sm font-bold text-purple-700 uppercase mb-2">Description</h3>
+                <p className="text-gray-600 bg-purple-50/30 p-4 rounded-lg border border-purple-100 min-h-[100px]">
+                  {currentTask.description || 'No description provided.'}
+                </p>
+              </section>
 
-              <div>
+              <section>
                 <div className="flex justify-between items-center mb-3">
-                  <button
-                    onClick={() => setSubtasksExpanded(!subtasksExpanded)}
-                    className="flex items-center gap-2 font-semibold text-purple-700"
-                  >
+                  <button onClick={() => setSubtasksExpanded(!subtasksExpanded)} className="flex items-center gap-2 font-bold text-purple-700">
                     {subtasksExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-                    Subtasks
-                    <span className="text-sm font-normal text-gray-500">({completedSubtasks}/{totalSubtasks})</span>
+                    Subtasks ({completedSubtasks}/{totalSubtasks})
                   </button>
-                  <Button
-                    onClick={() => setShowSubtaskForm(true)}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-md text-sm flex items-center gap-1.5"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add
-                  </Button>
+                  {canManage && (
+                    <Button onClick={() => setShowSubtaskForm(true)} className="bg-purple-600 text-white text-xs py-1.5 px-3 rounded-lg">
+                      <Plus className="w-4 h-4 mr-1 inline" /> Add Subtask
+                    </Button>
+                  )}
                 </div>
 
                 {totalSubtasks > 0 && (
-                  <div className="w-full bg-purple-200 rounded-full h-2 mb-4">
-                    <div className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full" style={{ width: `${subtaskProgress}%` }}></div>
+                  <div className="w-full bg-purple-100 rounded-full h-2 mb-4">
+                    <div className="bg-gradient-to-r from-purple-600 to-pink-500 h-2 rounded-full transition-all" style={{ width: `${subtaskProgress}%` }}></div>
+                  </div>
+                )}
+
+                {showSubtaskForm && (
+                  <div className="mb-4 border-2 border-dashed border-purple-200 p-4 rounded-xl bg-purple-50/50">
+                    <TaskForm isSubtask={true} onSubmit={handleAddSubtask} onClose={() => setShowSubtaskForm(false)} />
                   </div>
                 )}
 
                 {subtasksExpanded && (
                   <div className="space-y-2">
-                    {showSubtaskForm && (
-                      <div className="p-3 border-2 border-purple-200 rounded-lg bg-purple-50">
-                        <TaskForm
-                          onClose={() => setShowSubtaskForm(false)}
-                          onSubmit={handleAddSubtask}
-                          isSubtask={true}
-                        />
-                      </div>
-                    )}
-                    {subtasks.map(subtask => (
-                      <SubtaskItem
-                        key={subtask.id}
-                        subtask={subtask}
-                        onUpdate={handleUpdateSubtask}
-                        onDelete={handleDeleteSubtask}
-                        onAddSubtask={handleAddSubtask}
-                        level={0}
+                    {subtasks.map(sub => (
+                      <SubtaskItem 
+                        key={sub.id} 
+                        subtask={sub} 
+                        onUpdate={handleUpdateSubtask} 
+                        onDelete={handleDeleteSubtask} 
                       />
                     ))}
-                    {subtasks.length === 0 && !showSubtaskForm && (
-                      <div className="text-center py-8 text-gray-500 border-2 border-dashed border-purple-200 rounded-lg">
-                        <h4 className="font-semibold text-purple-700">No Subtasks</h4>
-                        <p className="text-sm mt-1 text-purple-500">Add a subtask to break this task into smaller parts.</p>
-                      </div>
-                    )}
                   </div>
                 )}
-              </div>
+              </section>
             </div>
 
-            <div className="col-span-1">
-              <div className="space-y-6">
-                <div>
-                  <h3 className="font-semibold text-purple-700 mb-2">Status</h3>
-                  {totalSubtasks === 0 ? (
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => handleStatusChange('not yet begun')}
-                        className={`px-3 py-1 text-xs rounded-full border-2 ${
-                          currentTask.status === 'not yet begun'
-                            ? 'bg-red-500 text-white font-semibold border-red-600'
-                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                        }`}
-                      >
-                        Todo
-                      </button>
-                      <button
-                        onClick={() => handleStatusChange('in progress')}
-                        className={`px-3 py-1 text-xs rounded-full border-2 ${
-                          currentTask.status === 'in progress'
-                            ? 'bg-yellow-500 text-white font-semibold border-yellow-600'
-                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                        }`}
-                      >
-                        In Progress
-                      </button>
-                      <button
-                        onClick={() => handleStatusChange('completed')}
-                        className={`px-3 py-1 text-xs rounded-full border-2 ${
-                          currentTask.status === 'completed'
-                            ? 'bg-green-500 text-white font-semibold border-green-600'
-                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
-                        }`}
-                      >
-                        Done
-                      </button>
-                    </div>
-                  ) : (
-                    getStatusPill(currentTask.status)
-                  )}
+            {/* SIDEBAR */}
+            <div className="col-span-1 space-y-6 bg-gray-50/50 p-4 rounded-xl border border-gray-100">
+              <div>
+                <h3 className="text-xs font-bold text-gray-400 uppercase mb-2">Status</h3>
+                <div className="flex flex-wrap gap-2">
+                  {['todo', 'in progress', 'completed'].map(s => (
+                    <button key={s} 
+                      disabled={isMember && currentTask.assigned_to !== loggedInUser?.id}
+                      onClick={() => handleUpdate({ ...currentTask, status: s })} 
+                      className={`px-3 py-1 text-xs rounded-full border-2 ${currentTask.status === s ? 'bg-purple-600 border-purple-600 text-white' : 'bg-white text-gray-500'}`}>
+                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                    </button>
+                  ))}
                 </div>
-                <div>
-                  <h3 className="font-semibold text-purple-700 mb-2">Assignee</h3>
-                  <div className="flex items-center gap-2 text-gray-800">
-                    <User className="w-5 h-5 text-purple-400" />
-                    <span className="font-medium">{currentTask.assignee || 'Unassigned'}</span>
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-semibold text-purple-700 mb-2">Due Date</h3>
-                  <div className="flex items-center gap-2 text-gray-800">
-                    <Calendar className="w-5 h-5 text-purple-400" />
-                    <span className="font-medium">{currentTask.dueDate || 'No due date'}</span>
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-semibold text-purple-700 mb-2">Priority</h3>
-                  <div className="flex items-center gap-2 text-gray-800">
-                    <Flag className="w-5 h-5 text-purple-400" />
-                    <span className="font-medium">{currentTask.priority || 'Medium'}</span>
-                  </div>
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-gray-400 uppercase mb-2">Assignee</h3>
+                <div className="flex items-center gap-2 text-gray-700 font-medium">
+                  <User className="w-4 h-4 text-purple-600" />
+                  {currentTask.assignee?.name || 'Unassigned'}
                 </div>
               </div>
             </div>
@@ -267,5 +199,4 @@ const TaskDetailModal = ({ task, onClose, onUpdateTask }) => {
     </div>
   );
 };
-
 export default TaskDetailModal;

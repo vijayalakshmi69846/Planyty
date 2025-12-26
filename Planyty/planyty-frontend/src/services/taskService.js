@@ -1,33 +1,23 @@
-import api from './api';
+import api from './api'; // Import the axios instance we created earlier
 
-export const getTasks = async (projectId) => {
-  try {
+export const taskService = {
+  getTasks: async (projectId) => {
     const response = await api.get(`/projects/${projectId}/tasks`);
     return response.data;
-  } catch (error) {
-    console.error('Failed to fetch tasks:', error);
-    throw error;
-  }
-};
+  },
 
-export const createTask = async (projectId, taskData) => {
-  try {
-    const response = await api.post(`/projects/${projectId}/tasks`, taskData);
+  createTask: async (taskData) => {
+    const response = await api.post('/tasks', taskData);
     return response.data;
-  } catch (error) {
-    console.error('Failed to create task:', error);
-    throw error;
-  }
-};
+  },
 
-export const updateTaskStatus = async (taskId, newStatus) => {
-  try {
-    const response = await api.patch(`/tasks/${taskId}/status`, { status: newStatus });
+  updateTask: async (id, taskData) => {
+    const response = await api.put(`/tasks/${id}`, taskData);
     return response.data;
-  } catch (error) {
-    console.error('Failed to update task status:', error);
-    throw error;
+  },
+
+  deleteTask: async (id) => {
+    const response = await api.delete(`/tasks/${id}`);
+    return response.data;
   }
 };
-
-// Add more task-related service functions as needed (e.g., update, delete, getById)

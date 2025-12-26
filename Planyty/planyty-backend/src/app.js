@@ -1,9 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-
 const app = express();
-
+const taskRoutes = require('./routes/task.routes');
+const projectRoutes = require('./routes/project.routes'); // check path
 app.use(helmet());
 app.use(cors({
   origin: /^http:\/\/localhost:\d+$/,
@@ -11,23 +11,19 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 // --- ROUTES ---
-
 // 1. Auth & Identity
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/invitations', require('./routes/invitation.routes'));
-
 // 2. Core Business Logic (Specific Paths First)
 // This ensures /api/workspaces correctly hits workspace.routes.js
 app.use('/api/workspaces', require('./routes/workspace.routes')); 
-
+app.use('/api', taskRoutes);
 app.use('/api/projects', require('./routes/project.routes'));
-app.use('/api/tasks', require('./routes/task.routes'));
 app.use('/api', require('./routes/company.routes'));
 app.use('/api/teams', require('./routes/teamRoutes'));
-
+app.use('/api/projects', projectRoutes);
 // 3. Utility & Health
 app.get('/health', (req, res) => {
   res.status(200).json({

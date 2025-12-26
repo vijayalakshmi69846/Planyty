@@ -1,6 +1,6 @@
 // src/services/api.js
 import axios from 'axios';
-
+import api from './api'; // Import your configured axios instance
 const api = axios.create({
   baseURL: 'http://localhost:5000/api',
   headers: {
@@ -62,5 +62,4 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
-
 export default api;

@@ -1,7 +1,7 @@
 const { User } = require('../models');
 const { sendUserEvent } = require('../services/kafka.producer');
 const { paginate } = require('../utils/helpers');
-
+const { Op } = require('sequelize');
 exports.getAllUsers = async (req, res) => {
   try {
     const { page = 1, limit = 10, role } = req.query;
@@ -133,4 +133,23 @@ exports.updateUserRole = async (req, res) => {
     console.error('Update role error:', error);
     res.status(500).json({ error: 'Failed to update role' });
   }
+};
+// SEARCH USERS (The function your route was missing)
+exports.searchUsers = async (req, res) => {
+    try {
+        const { query } = req.query;
+        if (!query) return res.json([]);
+
+        const users = await User.findAll({
+            where: {
+                email: { [Op.like]: `${query}%` }
+            },
+            attributes: ['id', 'name', 'email'],
+            limit: 5
+        });
+        res.json(users);
+    } catch (error) {
+        console.error('Search users error:', error);
+        res.status(500).json({ message: error.message });
+    }
 };

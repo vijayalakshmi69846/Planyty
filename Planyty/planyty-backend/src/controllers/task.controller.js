@@ -1,469 +1,207 @@
-const { Task, Project, User } = require('../models');
-const { sendTaskEvent, sendActivityLog } = require('../services/kafka.producer');
-const { paginate } = require('../utils/helpers');
-
+const { Task, Subtask, Tag, User, sequelize } = require('../models');
+const emailService = require('../services/email.service'); // Ensure path is correct
 exports.createTask = async (req, res) => {
-  try {
-    const { 
-      title, 
-      description, 
-      project_id, 
-      assigned_to,
-      priority,
-      due_date,
-      estimated_hours 
-    } = req.body;
+    let transaction;
+    try {
+        transaction = await sequelize.transaction();
+        const { title, description, project_id, assigned_to, priority, due_date, tags, subtasks, status } = req.body;
 
-    // Check if project exists and user has access
-    const project = await Project.findByPk(project_id);
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
+        // 1. Create the task
+        const task = await Task.create({
+            title, 
+            description, 
+            project_id, 
+            // Handle 'Me' shortcut vs User ID
+assigned_to: (assigned_to === 'Me') ? req.user.id : (assigned_to || null),            due_date,
+            status: status || 'todo' 
+        }, { transaction });
 
-    // Check permission
-    if (req.user.role !== 'admin' && project.created_by !== req.user.id) {
-      return res.status(403).json({ error: 'Not authorized to create task in this project' });
-    }
-
-    // Check if assignee exists (if provided)
-    if (assigned_to) {
-      const assignee = await User.findByPk(assigned_to);
-      if (!assignee) {
-        return res.status(404).json({ error: 'Assignee not found' });
-      }
-    }
-
-    const task = await Task.create({
-      title,
-      description,
-      project_id,
-      assigned_to,
-      created_by: req.user.id,
-      priority: priority || 'medium',
-      due_date,
-      estimated_hours,
-      status: 'todo',
-      actual_hours: 0
-    });
-
-    // Send Kafka events
-    await sendTaskEvent('TASK_CREATED', task, req.user.id);
-    await sendActivityLog(
-      req.user.id,
-      'CREATE_TASK',
-      'task',
-      task.id,
-      { 
-        taskTitle: task.title,
-        projectId: task.project_id
-      }
-    );
-
-    // If assigned, also log assignment
-    if (assigned_to) {
-      await sendActivityLog(
-        req.user.id,
-        'ASSIGN_TASK',
-        'task',
-        task.id,
-        { 
-          taskTitle: task.title,
-          assignedTo: assigned_to
+        // 2. Handle Tags
+        if (tags && tags.length > 0) {
+            const tagInstances = await Promise.all(
+                tags.map(tagName => Tag.findOrCreate({ where: { name: tagName }, transaction }))
+            );
+            await task.setTags(tagInstances.map(t => t[0]), { transaction });
         }
-      );
-    }
 
-    res.status(201).json({
-      message: 'Task created successfully',
-      task: await Task.findByPk(task.id, {
-        include: [
-          {
-            model: User,
-            as: 'assignee',
-            attributes: ['id', 'name', 'email']
-          },
-          {
-            model: Project,
-            as: 'project',
-            attributes: ['id', 'name']
-          }
-        ]
-      })
-    });
-
-  } catch (error) {
-    console.error('Create task error:', error);
-    res.status(500).json({ error: 'Failed to create task' });
-  }
-};
-
-exports.getAllTasks = async (req, res) => {
-  try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      project_id, 
-      status, 
-      priority,
-      assigned_to,
-      search 
-    } = req.query;
-    
-    const { offset, limit: queryLimit } = paginate(page, limit);
-
-    const where = {};
-    if (project_id) where.project_id = project_id;
-    if (status) where.status = status;
-    if (priority) where.priority = priority;
-    if (assigned_to) where.assigned_to = assigned_to;
-    if (search) where.title = { $like: `%${search}%` };
-
-    // For non-admins, only show tasks from their projects or assigned to them
-    if (req.user.role !== 'admin') {
-      const userProjects = await Project.findAll({
-        where: { created_by: req.user.id },
-        attributes: ['id']
-      });
-      const projectIds = userProjects.map(p => p.id);
-      
-      where.$or = [
-        { project_id: projectIds },
-        { assigned_to: req.user.id },
-        { created_by: req.user.id }
-      ];
-    }
-
-    const { count, rows: tasks } = await Task.findAndCountAll({
-      where,
-      include: [
-        {
-          model: User,
-          as: 'assignee',
-          attributes: ['id', 'name', 'email']
-        },
-        {
-          model: User,
-          as: 'creator',
-          attributes: ['id', 'name', 'email']
-        },
-        {
-          model: Project,
-          as: 'project',
-          attributes: ['id', 'name']
+        // 3. Handle Subtasks
+        if (subtasks && subtasks.length > 0) {
+            await Promise.all(subtasks.map(s => Subtask.create({
+                title: s.title,
+                task_id: task.id,
+                status: 'todo'
+            }, { transaction })));
         }
-      ],
-      offset,
-      limit: queryLimit,
-      order: [['created_at', 'DESC']]
-    });
 
-    res.json({
-      tasks,
-      pagination: {
-        page: parseInt(page),
-        limit: queryLimit,
-        total: count,
-        pages: Math.ceil(count / queryLimit)
-      }
-    });
+        await transaction.commit();
 
-  } catch (error) {
-    console.error('Get tasks error:', error);
-    res.status(500).json({ error: 'Failed to get tasks' });
-  }
-};
+        // 4. RE-FETCH with associations (Crucial for the "Unassigned" UI fix)
+        const completedTask = await Task.findByPk(task.id, {
+            include: [
+                { model: Tag, as: 'tags', attributes: ['id', 'name'], through: { attributes: [] } },
+                { model: Subtask, as: 'subtasks' },
+                { model: User, as: 'assignee', attributes: ['id', 'name', 'email'] }
+            ]
+        });
 
-exports.getTaskById = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const task = await Task.findByPk(id, {
-      include: [
-        {
-          model: User,
-          as: 'assignee',
-          attributes: ['id', 'name', 'email', 'role']
-        },
-        {
-          model: User,
-          as: 'creator',
-          attributes: ['id', 'name', 'email']
-        },
-        {
-          model: Project,
-          as: 'project',
-          include: [{
-            model: User,
-            as: 'creator',
-            attributes: ['id', 'name', 'email']
-          }]
+        // 5. TRIGGER EMAIL (If someone is assigned)
+        if (completedTask.assignee && completedTask.assignee.email) {
+            await emailService.sendMemberAddedEmail(
+                completedTask.assignee.email,
+                `Project Workspace`, // You can pass project name here if available
+                req.user.name || "A teammate",
+                { name: title, dueDate: due_date }
+            );
         }
-      ]
-    });
 
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found' });
+        res.status(201).json(completedTask);
+    } catch (error) {
+        if (transaction && !transaction.finished) await transaction.rollback();
+        res.status(400).json({ message: error.message });
     }
-
-    // Check permission
-    if (req.user.role !== 'admin') {
-      const project = await Project.findByPk(task.project_id);
-      if (!project || (project.created_by !== req.user.id && task.assigned_to !== req.user.id && task.created_by !== req.user.id)) {
-        return res.status(403).json({ error: 'Not authorized to view this task' });
-      }
-    }
-
-    res.json({ task });
-
-  } catch (error) {
-    console.error('Get task error:', error);
-    res.status(500).json({ error: 'Failed to get task' });
-  }
 };
-
+exports.getTasksByProject = async (req, res) => {
+    try {
+        const tasks = await Task.findAll({
+            where: { project_id: req.params.projectId },
+            include: [
+                { model: Tag, as: 'tags', attributes: ['id', 'name'], through: { attributes: [] } },
+                { model: User, as: 'assignee', attributes: ['id', 'name', 'email'] },
+                { 
+                    model: Subtask, 
+                    as: 'subtasks',
+                    where: { parent_subtask_id: null },
+                    required: false,
+                    include: { model: Subtask, as: 'children' }
+                }
+            ],
+            order: [['created_at', 'DESC']]
+        });
+        res.status(200).json(tasks);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
 exports.updateTask = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body;
-
-    const task = await Task.findByPk(id, {
-      include: [{
-        model: Project,
-        as: 'project'
-      }]
-    });
-
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    // Check permission
-    if (req.user.role !== 'admin') {
-      const hasAccess = 
-        task.project.created_by === req.user.id || 
-        task.created_by === req.user.id ||
-        task.assigned_to === req.user.id;
-      
-      if (!hasAccess) {
-        return res.status(403).json({ error: 'Not authorized to update this task' });
-      }
-
-      // Regular users can only update certain fields
-      if (task.assigned_to === req.user.id || task.created_by === req.user.id) {
-        const allowedFields = ['status', 'actual_hours', 'description'];
-        const unauthorizedFields = Object.keys(updates).filter(
-          field => !allowedFields.includes(field)
-        );
+    try {
+        const { id } = req.params;
+        const { tags, ...updates } = req.body;
         
-        if (unauthorizedFields.length > 0) {
-          return res.status(403).json({ 
-            error: `Only admins or project owners can update: ${unauthorizedFields.join(', ')}` 
-          });
+        const task = await Task.findByPk(id);
+        if (!task) return res.status(404).json({ message: 'Task not found' });
+
+        const oldAssigneeId = task.assigned_to;
+
+        // --- ADD THIS BLOCK TO FIX THE 400 ERROR ---
+        if (updates.assigned_to === 'Me') {
+            updates.assigned_to = req.user.id;
+        } else if (updates.assigned_to === '') {
+            updates.assigned_to = null;
         }
-      }
-    }
+        // --------------------------------------------
 
-    const oldData = { ...task.toJSON() };
-    
-    // Update task
-    await task.update(updates);
+        // Now update becomes safe because assigned_to is a Number or Null
+        await task.update(updates);
 
-    // Send Kafka events
-    await sendTaskEvent('TASK_UPDATED', task, req.user.id, { oldData });
-    await sendActivityLog(
-      req.user.id,
-      'UPDATE_TASK',
-      'task',
-      task.id,
-      { 
-        taskTitle: task.title,
-        changes: Object.keys(updates)
-      }
-    );
-
-    // If assignment changed, log it
-    if (updates.assigned_to && updates.assigned_to !== oldData.assigned_to) {
-      await sendActivityLog(
-        req.user.id,
-        'REASSIGN_TASK',
-        'task',
-        task.id,
-        { 
-          taskTitle: task.title,
-          oldAssignee: oldData.assigned_to,
-          newAssignee: updates.assigned_to
+        if (tags) {
+            const tagInstances = await Promise.all(
+                tags.map(tagName => Tag.findOrCreate({ where: { name: tagName } }))
+            );
+            await task.setTags(tagInstances.map(t => t[0]));
         }
-      );
+
+        const updatedTask = await Task.findByPk(id, {
+            include: [
+                { model: Tag, as: 'tags', attributes: ['id', 'name'], through: { attributes: [] } }, 
+                { model: Subtask, as: 'subtasks' },
+                { model: User, as: 'assignee', attributes: ['id', 'name', 'email'] }
+            ]
+        });
+
+        // Email Trigger
+        if (updatedTask.assigned_to && updatedTask.assigned_to !== oldAssigneeId) {
+            if (updatedTask.assignee && updatedTask.assignee.email) {
+                await emailService.sendMemberAddedEmail(
+                    updatedTask.assignee.email,
+                    "Updated Project",
+                    req.user.name || "A teammate",
+                    { name: updatedTask.title, dueDate: updatedTask.due_date }
+                );
+            }
+        }
+
+        res.status(200).json(updatedTask);
+    } catch (error) {
+        console.error("Update Error:", error); // Log the specific error
+        res.status(400).json({ message: error.message });
     }
-
-    // If status changed to completed, check project completion
-    if (updates.status === 'completed' && oldData.status !== 'completed') {
-      const projectTasks = await Task.findAll({ 
-        where: { project_id: task.project_id } 
-      });
-      
-      const allCompleted = projectTasks.every(t => t.status === 'completed');
-      if (allCompleted) {
-        await task.project.update({ status: 'completed' });
-        await sendProjectEvent('PROJECT_COMPLETED', task.project, req.user.id);
-      }
-    }
-
-    res.json({
-      message: 'Task updated successfully',
-      task: await Task.findByPk(id, {
-        include: [
-          {
-            model: User,
-            as: 'assignee',
-            attributes: ['id', 'name', 'email']
-          },
-          {
-            model: Project,
-            as: 'project',
-            attributes: ['id', 'name']
-          }
-        ]
-      })
-    });
-
-  } catch (error) {
-    console.error('Update task error:', error);
-    res.status(500).json({ error: 'Failed to update task' });
-  }
 };
-
 exports.deleteTask = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const task = await Task.findByPk(id, {
-      include: [{
-        model: Project,
-        as: 'project'
-      }]
-    });
-
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found' });
+    try {
+        const { id } = req.params;
+        await Task.destroy({ where: { id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ message: error.message });
     }
-
-    // Check permission
-    if (req.user.role !== 'admin' && task.project.created_by !== req.user.id) {
-      return res.status(403).json({ error: 'Not authorized to delete this task' });
+};
+// CREATE a Single Subtask (for the Plus button in Form)
+exports.createSubtask = async (req, res) => {
+    try {
+        const { taskId } = req.params;
+        const subtask = await Subtask.create({
+            ...req.body,
+            task_id: taskId
+        });
+        res.status(201).json(subtask);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
     }
-
-    await task.destroy();
-
-    // Send Kafka events
-    await sendTaskEvent('TASK_DELETED', task, req.user.id);
-    await sendActivityLog(
-      req.user.id,
-      'DELETE_TASK',
-      'task',
-      id,
-      { taskTitle: task.title }
-    );
-
-    res.json({
-      message: 'Task deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete task error:', error);
-    res.status(500).json({ error: 'Failed to delete task' });
-  }
 };
 
+// UPDATE a Subtask (e.g., checking off a subtask)
+exports.updateSubtask = async (req, res) => {
+    try {
+        const { id } = req.params;
+        await Subtask.update(req.body, { where: { id } });
+        const updated = await Subtask.findByPk(id);
+        res.status(200).json(updated);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
 exports.getMyTasks = async (req, res) => {
-  try {
-    const { status, priority, page = 1, limit = 10 } = req.query;
-    const { offset, limit: queryLimit } = paginate(page, limit);
-
-    const where = { assigned_to: req.user.id };
-    if (status) where.status = status;
-    if (priority) where.priority = priority;
-
-    const { count, rows: tasks } = await Task.findAndCountAll({
-      where,
-      include: [
-        {
-          model: Project,
-          as: 'project',
-          attributes: ['id', 'name', 'status']
-        }
-      ],
-      offset,
-      limit: queryLimit,
-      order: [
-        ['priority', 'DESC'],
-        ['due_date', 'ASC']
-      ]
-    });
-
-    res.json({
-      tasks,
-      pagination: {
-        page: parseInt(page),
-        limit: queryLimit,
-        total: count,
-        pages: Math.ceil(count / queryLimit)
-      }
-    });
-
-  } catch (error) {
-    console.error('Get my tasks error:', error);
-    res.status(500).json({ error: 'Failed to get your tasks' });
-  }
+    try {
+        const tasks = await Task.findAll({
+            where: { assigned_to: req.user.id }, // Filters by the logged-in user's ID
+            include: [
+                { model: Tag, as: 'tags', attributes: ['name'] },
+                { model: Subtask, as: 'subtasks' }
+            ],
+            order: [['created_at', 'DESC']]
+        });
+        res.status(200).json(tasks);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
-
-exports.updateTaskStatus = async (req, res) => {
+// DELETE a task
+exports.deleteTask = async (req, res) => {
+    try {
+        const { id } = req.params;
+        await Task.destroy({ where: { id } });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+exports.deleteSubtask = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, actual_hours } = req.body;
-
-    const task = await Task.findByPk(id);
-
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    // Check if user is assignee or has permission
-    if (task.assigned_to !== req.user.id && req.user.role !== 'admin') {
-      const project = await Project.findByPk(task.project_id);
-      if (!project || project.created_by !== req.user.id) {
-        return res.status(403).json({ error: 'Not authorized to update this task' });
-      }
-    }
-
-    const updates = {};
-    if (status) updates.status = status;
-    if (actual_hours !== undefined) updates.actual_hours = actual_hours;
-
-    const oldData = { ...task.toJSON() };
-    await task.update(updates);
-
-    // Send events
-    await sendTaskEvent('TASK_STATUS_UPDATED', task, req.user.id, { oldData });
-    await sendActivityLog(
-      req.user.id,
-      'UPDATE_TASK_STATUS',
-      'task',
-      task.id,
-      { 
-        taskTitle: task.title,
-        oldStatus: oldData.status,
-        newStatus: status
-      }
-    );
-
-    res.json({
-      message: 'Task status updated successfully',
-      task
-    });
-
+    const deleted = await Subtask.destroy({ where: { id } });
+    if (!deleted) return res.status(404).json({ message: "Subtask not found" });
+    res.status(204).send();
   } catch (error) {
-    console.error('Update task status error:', error);
-    res.status(500).json({ error: 'Failed to update task status' });
+    res.status(500).json({ message: error.message });
   }
 };

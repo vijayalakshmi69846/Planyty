@@ -1,4 +1,3 @@
-// src/models/index.js
 const { sequelize } = require('../config/database');
 const User = require('./user.model');
 const Team = require('./team.model');
@@ -7,6 +6,9 @@ const TeamMember = require('./TeamMember');
 const Workspace = require('./workspace.model');
 const Company = require('./company.model');
 const Invitation = require('./invitation.model');
+const Task = require('./task.model');
+const Subtask = require('./subtask.model');
+const Tag = require('./tag.model');
 // 1. User <-> Project
 User.hasMany(Project, { foreignKey: 'created_by', as: 'createdProjects' });
 Project.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
@@ -26,4 +28,36 @@ TeamMember.belongsTo(Team, { foreignKey: 'team_id' });
 // 6. Many-to-Many: Team <-> User
 Team.belongsToMany(User, { through: TeamMember,foreignKey: 'team_id', otherKey: 'user_id',as: 'members' });
 User.belongsToMany(Team, { through: TeamMember, foreignKey: 'user_id', otherKey: 'team_id',as: 'teams' });
-module.exports = { sequelize, Project, User, Team, TeamMember, Company, Workspace, Invitation };
+// 1. Task <-> Subtask (One-to-Many)
+Task.hasMany(Subtask, { foreignKey: 'task_id', as: 'subtasks', onDelete: 'CASCADE' });
+Subtask.belongsTo(Task, { foreignKey: 'task_id' });
+
+// 2. Recursive Subtasks
+Subtask.hasMany(Subtask, { foreignKey: 'parent_subtask_id', as: 'children', onDelete: 'CASCADE' });
+Subtask.belongsTo(Subtask, { foreignKey: 'parent_subtask_id', as: 'parent' });
+
+// 3. Task <-> Tag (Modified Many-to-Many)
+Task.belongsToMany(Tag, { 
+    through: 'task_tags', 
+    foreignKey: 'task_id', 
+    otherKey: 'tag_id',
+    as: 'tags',
+    timestamps: false // Tells Sequelize task_tags doesn't have createdAt/updatedAt
+});
+
+Tag.belongsToMany(Task, { 
+    through: 'task_tags', 
+    foreignKey: 'tag_id', 
+    otherKey: 'task_id',
+    timestamps: false 
+});
+
+// Task <-> Project
+Project.hasMany(Task, { foreignKey: 'project_id', as: 'tasks', onDelete: 'CASCADE' });
+Task.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
+
+// Task <-> User (Assignee)
+User.hasMany(Task, { foreignKey: 'assigned_to', as: 'assignedTasks' });
+Task.belongsTo(User, { foreignKey: 'assigned_to', as: 'assignee' });
+
+module.exports = { sequelize, Project, User, Team, TeamMember, Company, Workspace, Invitation, Task, Tag, Subtask };

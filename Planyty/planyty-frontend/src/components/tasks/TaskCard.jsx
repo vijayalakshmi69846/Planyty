@@ -32,6 +32,17 @@ const TaskCard = ({ task, isCompleted = false }) => {
   const progress = subtasks.length > 0 ? (completedSubtasks / subtasks.length) * 100 : 0;
   const priorityStyles = getPriorityStyles(task.priority);
 
+  // Helper to get assignee name
+  const getAssigneeDisplay = () => {
+    if (!task.assignee) return 'Unassigned';
+    // If it's an object (from DB join), show the name
+    if (typeof task.assignee === 'object') {
+      return task.assignee.name || task.assignee.email.split('@')[0];
+    }
+    // Fallback for raw ID or string
+    return task.assignee;
+  };
+
   return (
     <div
       className={`p-3 rounded-lg border-2 transition-all duration-300 flex flex-col gap-2 cursor-pointer ${
@@ -49,7 +60,7 @@ const TaskCard = ({ task, isCompleted = false }) => {
         </h3>
       </div>
 
-      {/* Tags */}
+      {/* Tags - Updated to handle both strings and objects */}
       {task.tags && task.tags.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {task.tags.map((tag, index) => (
@@ -61,7 +72,7 @@ const TaskCard = ({ task, isCompleted = false }) => {
                   : 'bg-purple-100 text-purple-700'
               }`}
             >
-              {tag}
+              {typeof tag === 'object' ? tag.name : tag}
             </span>
           ))}
         </div>
@@ -103,24 +114,24 @@ const TaskCard = ({ task, isCompleted = false }) => {
             isCompleted ? 'text-green-600' : 'text-purple-600'
           }`}>
             <Clock size={12} />
-            <span>{task.dueDate || 'No date'}</span>
+            <span>{task.due_date ? new Date(task.due_date).toLocaleDateString() : 'No date'}</span>
           </div>
         </div>
         <div className="flex items-center gap-1">
           <User size={14} className={isCompleted ? 'text-green-500' : 'text-purple-500'} />
-          <span className={`text-sm font-medium ${
+          <span className={`text-xs font-medium ${
             isCompleted ? 'text-green-700' : 'text-purple-800'
           }`}>
-            {task.assignee || 'Unassigned'}
+            {getAssigneeDisplay()}
           </span>
         </div>
       </div>
 
       {/* Completion Date */}
-      {isCompleted && task.completedAt && (
+      {isCompleted && task.updatedAt && (
         <div className="flex items-center gap-1 text-xs text-green-600">
           <CheckCircle className="w-3 h-3" />
-          <span>Completed on {task.completedAt}</span>
+          <span>Updated: {new Date(task.updatedAt).toLocaleDateString()}</span>
         </div>
       )}
     </div>
