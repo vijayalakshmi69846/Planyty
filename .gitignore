@@ -1,0 +1,11 @@
+# Backend specific
+uploads/
+node_modules/
+.env
+*.log
+
+# Frontend specific
+planyty-frontend/node_modules/
+planyty-frontend/.env
+planyty-frontend/dist/
+planyty-frontend/.next/
